@@ -2,9 +2,9 @@ package handler
 
 import (
 	"fmt"
-	"gopan/db"
-	mydb "gopan/db/mysql"
-	"gopan/util"
+	"cloudDisk/db"
+	mydb "cloudDisk/db/mysql"
+	"cloudDisk/util"
 	"io"
 	"io/ioutil"
 	"log"

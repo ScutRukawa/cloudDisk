@@ -2,7 +2,7 @@ package db
 
 import (
 	"fmt"
-	mydb "gopan/db/mysql"
+	mydb "cloudDisk/db/mysql"
 	"time"
 )
 
