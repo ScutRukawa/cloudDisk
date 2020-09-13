@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"cloudDisk/common"
+	"cloudDisk/config"
 	"cloudDisk/db"
 	dblayer "cloudDisk/db"
 	"cloudDisk/meta"
+	"cloudDisk/mq"
 	"cloudDisk/util"
 	"encoding/json"
 	"fmt"
@@ -35,7 +38,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		fileMeta := meta.FileMeta{
 			FileName: head.Filename,
-			Location: "C:\\eznewei\\Mydocuments\\agogogogo\\" + head.Filename, ///change
+			Location: "/tmp/" + head.Filename, ///change
 			UploadAt: time.Now().Format("2006-01-02 15:04:05"),
 		}
 		newFile, err := os.Create(fileMeta.Location)
@@ -50,6 +53,32 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		newFile.Seek(0, 0)
 		fileMeta.FileSha1 = util.FileSha1(newFile)
+
+		//写入到ceph
+		// newFile.Seek(0, 0)
+		// data, _ := ioutil.ReadAll(newFile)
+		// bucket := ceph.GetCephBucket("testbucket1")
+		// cephPath := "/ceph/" + fileMeta.FileSha1
+		// _ = bucket.Put(cephPath, data, "octet-stream", s3.PublicRead)
+		// fileMeta.Location = cephPath
+
+		//写入到rabbitmq
+		cephPath := "/ceph/" + fileMeta.FileSha1
+		data := mq.TransferData{
+			FileHash:      fileMeta.FileSha1,
+			CurLocation:   fileMeta.Location,
+			Destination:   cephPath,
+			DestStoreType: common.StoreOSS,
+		}
+		pubData, _ := json.Marshal(data) //to to  为什么转化成json
+		res := mq.Publish(
+			config.TransExchangeName,
+			config.TransOSSRoutingKey,
+			pubData)
+		if !res {
+			log.Println("mq.Publish failed")
+		}
+		log.Println("mq.Publish success")
 		meta.UpdateFileMetaDb(fileMeta)
 
 		// update user file table
@@ -104,6 +133,7 @@ func GetFileMetaHandler(w http.ResponseWriter, r *http.Request) {
 //	io.WriteString(w,string(fileData))
 //}
 func DownloadHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println("DownloadHandler")
 	r.ParseForm()
 	fileSha1 := r.Form["filehash"][0]
 	filemata := meta.GetFileMeta(fileSha1)
@@ -219,3 +249,8 @@ func TryFastUploadHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 //多个用户上传同一个文件 怎么处理？to do
+
+func DownloadUrlHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	fileLocation:=r.Form.Get("filehash")
+}
