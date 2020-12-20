@@ -1,131 +1,114 @@
 package handler
 
 import (
-	"fmt"
 	"cloudDisk/db"
 	mydb "cloudDisk/db/mysql"
 	"cloudDisk/util"
-	"io"
-	"io/ioutil"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"reflect"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
-func SignUpHandler(w http.ResponseWriter,r *http.Request){
-	if r.Method=="GET"{
-		data,err:=ioutil.ReadFile("./static/view/signup.html")
-		if err!=nil{
-			io.WriteString(w,err.Error())
-			return
-		}
-		io.WriteString(w,string(data))
-	}else if r.Method=="POST"{
-		fmt.Println("start parse")
-		r.ParseForm()
-		username:=r.Form.Get("username")
-		passwd:=r.Form.Get("password")
-		//passwdc:=r.Form.Get("passwdc")
-		//if passwd!=passwdc{
-		//	io.WriteString(w,"passwd is different from the first")
-		//	return
-		//}
-		ret:=db.UserSignUp(username,passwd)
-		if ret==false{
-			log.Println("UserSignUp failed")
-			//io.WriteString(w,"UserSignUp failed")
-			http.NotFound(w,r)
-		}
-		//fmt.Fprintf(w,"UserSignUp success,your user name is:%s",username)
-		if ret {
-			w.Write([]byte("SUCCESS"))
-		} else {
-			w.Write([]byte("FAILED"))
-		}
-	}else{
-		fmt.Println("method err")
-	}
+func SignUpHandler(c *gin.Context) {
+	dir, _ := os.Getwd()
+	fmt.Println("pwd:", dir)
+	c.Redirect(http.StatusFound, "./static/view/signup.html")
 }
-func SignInHandler(w http.ResponseWriter,r *http.Request){
-	if r.Method=="GET"{
-		data,err:=ioutil.ReadFile("./static/view/signin.html")
-		if err!=nil{
-			http.NotFound(w,r)
-		}
-		io.WriteString(w,string(data))
+func DoSignupHandler(c *gin.Context) { //post
+	username := c.Request.FormValue("username")
+	passwd := c.Request.FormValue("password")
+
+	if len(username) < 3 || len(passwd) < 5 {
+		c.JSON(http.StatusOK, gin.H{
+			"msg":  "invalid parameter",
+			"code": -1,
+		})
 		return
-	} else if r.Method=="POST"{
-		//1，密码校验
-		r.ParseForm()
-		username:=r.Form.Get("username")
-		password:=r.Form.Get("password")
-		ret:=checkUser(username,password)
-		fmt.Println("ret:",ret)
-		if !ret {
-			log.Println("password is not correct")
-			io.WriteString(w,"password is not correct")
-			return
-		}
-		//2，生产访问token
-		token := GenToken(username)
-		upRes := db.UpdateToken(username, token)
-		if !upRes {
-			w.Write([]byte("FAILED"))
-			return
-		}
-		//3，重定向到home
-		resp := util.RespMsg{
-			Code: 0,
-			Msg:  "OK",
-			Data: struct {
-				Location string
-				Username string
-				Token    string
-			}{
-				Location: "http://" + r.Host + "/static/view/home.html",
-				Username: username,
-				Token:    token,
-			},
-		}
-		w.Write(resp.JSONBytes())
-
-		//w.Write([]byte("/static/view/home.html")) //三种有何却别
-
-		//http.Redirect(w,r,"/static/view/home.html",http.StatusFound)
-		//data,err:=ioutil.ReadFile("./static/view/home.html")
-		//if err!=nil{
-		//	fmt.Println("not fund")
-		//	http.NotFound(w,r)
-		//}
-		//io.WriteString(w,string(data))
-		fmt.Println("http://" + r.Host + "/static/view/home.html")
-
 	}
 
+	ret := db.UserSignUp(username, passwd)
+	if ret {
+		c.JSON(http.StatusOK, gin.H{
+			"msg":  "Sign up Success",
+			"code": 0,
+		})
+	} else {
+		c.JSON(http.StatusOK, gin.H{
+			"msg":  "Sign up fail",
+			"code": -2,
+		})
+	}
 }
-func checkUser(username string,password string)bool{
-	stmt,err:=mydb.DBConn().Prepare("select * from tbl_user where user_name=? limit 1")
-	if err!=nil{
+func SignInHandler(c *gin.Context) {
+	c.Redirect(http.StatusFound, "./static/view/signin.html")
+	return
+}
+func DoSignInHandler(c *gin.Context) {
+	username := c.Request.FormValue("username")
+	password := c.Request.FormValue("password")
+	ret := checkUser(username, password)
+	fmt.Println("ret:", ret)
+	if !ret {
+		c.JSON(http.StatusOK, gin.H{
+			"msg":  "password error",
+			"code": -1,
+		})
+		return
+	}
+	//2，生产访问token
+	token := GenToken(username)
+	upRes := db.UpdateToken(username, token)
+	if !upRes {
+		c.JSON(http.StatusOK, gin.H{
+			"msg":  "token error",
+			"code": -2,
+		})
+		return
+	}
+	//3，重定向到home
+	resp := util.RespMsg{
+		Code: 0,
+		Msg:  "OK",
+		Data: struct {
+			Location string
+			Username string
+			Token    string
+		}{
+			Location: "/static/view/home.html",
+			Username: username,
+			Token:    token,
+		},
+	}
+	c.Data(http.StatusOK, "application/json", resp.JSONBytes())
+	return
+}
+func checkUser(username string, password string) bool {
+	stmt, err := mydb.DBConn().Prepare("select * from tbl_user where user_name=? limit 1")
+	if err != nil {
 		fmt.Println(err.Error())
 		return false
 	}
-	row,err:=stmt.Query(username)
-	if err!=nil{
+	row, err := stmt.Query(username)
+	if err != nil {
 		log.Println(err.Error())
 		return false
-	}else if row==nil{
+	} else if row == nil {
 		fmt.Println("username not fund")
 		return false
 	}
-	pRows:=mydb.ParseRows(row)
-	passwd,ok:=pRows[0]["user_pwd"]
-	pass,ok2:=passwd.([]uint8)
-	fmt.Println("type is :",reflect.TypeOf(passwd))
-	fmt.Println("passwd is :",pass)
-	fmt.Println("ok is :",ok2)
-	fmt.Println("string(pass) :",string(pass))
-	if ok&&len(pRows)>0&&string(pass)==password{
+	pRows := mydb.ParseRows(row)
+	passwd, ok := pRows[0]["user_pwd"]
+	pass, ok2 := passwd.([]uint8)
+	fmt.Println("type is :", reflect.TypeOf(passwd))
+	fmt.Println("passwd is :", pass)
+	fmt.Println("ok is :", ok2)
+	fmt.Println("string(pass) :", string(pass))
+	if ok && len(pRows) > 0 && string(pass) == password {
 		return true
 	}
 	log.Println("pass word is null")

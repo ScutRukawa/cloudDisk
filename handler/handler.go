@@ -17,105 +17,114 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
-func UploadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "GET" {
-		data, err := ioutil.ReadFile("./static/view/index.html")
-		log.Println("receive upload file request ")
-		if err != nil {
-			io.WriteString(w, err.Error())
-			return
-		}
-		io.WriteString(w, string(data))
-	} else if r.Method == "POST" {
-		fmt.Println("recieve file")
-		file, head, err := r.FormFile("file")
-		defer file.Close()
-		if err != nil {
-			fmt.Printf("failed to read data:%s", err) //很多err 的判断 改进
-			return
-		}
-		fileMeta := meta.FileMeta{
-			FileName: head.Filename,
-			Location: "/tmp/" + head.Filename, ///change
-			UploadAt: time.Now().Format("2006-01-02 15:04:05"),
-		}
-		newFile, err := os.Create(fileMeta.Location)
-		if err != nil {
-			fmt.Println("create file err:", err)
-			return
-		}
-		fileMeta.FileSize, err = io.Copy(newFile, file)
-		if err != nil {
-			fmt.Println("save data to file failed:", err)
-			return
-		}
-		newFile.Seek(0, 0)
-		fileMeta.FileSha1 = util.FileSha1(newFile)
+// UploadHandler is used to upload file
+func UploadHandler(c *gin.Context) {
+	c.Redirect(http.StatusOK, "./static/view/index.html")
+}
 
-		//写入到ceph
-		// newFile.Seek(0, 0)
-		// data, _ := ioutil.ReadAll(newFile)
-		// bucket := ceph.GetCephBucket("testbucket1")
-		// cephPath := "/ceph/" + fileMeta.FileSha1
-		// _ = bucket.Put(cephPath, data, "octet-stream", s3.PublicRead)
-		// fileMeta.Location = cephPath
+// UploadHandlerPost is  used to upload file
+func UploadHandlerPost(c *gin.Context) {
+	fmt.Println("recieve file")
+	fileHeader, err := c.FormFile("file")
+	file, err := fileHeader.Open()
+	defer file.Close()
+	if err != nil {
+		fmt.Printf("failed to read data:%s", err) //很多err 的判断 改进
+		return
+	}
+	fileMeta := meta.FileMeta{
+		FileName: fileHeader.Filename,
+		Location: "/tmp/" + fileHeader.Filename, ///change
+		UploadAt: time.Now().Format("2006-01-02 15:04:05"),
+	}
+	newFile, err := os.Create(fileMeta.Location)
+	if err != nil {
+		fmt.Println("create file err:", err)
+		return
+	}
+	fileMeta.FileSize, err = io.Copy(newFile, file)
+	if err != nil {
+		fmt.Println("save data to file failed:", err)
+		return
+	}
+	newFile.Seek(0, 0)
+	fileMeta.FileSha1 = util.FileSha1(newFile)
 
-		//写入到rabbitmq
-		cephPath := "/ceph/" + fileMeta.FileSha1
-		data := mq.TransferData{
-			FileHash:      fileMeta.FileSha1,
-			CurLocation:   fileMeta.Location,
-			Destination:   cephPath,
-			DestStoreType: common.StoreOSS,
-		}
-		pubData, _ := json.Marshal(data) //to to  为什么转化成json
-		res := mq.Publish(
-			config.TransExchangeName,
-			config.TransOSSRoutingKey,
-			pubData)
-		if !res {
-			log.Println("mq.Publish failed")
-		}
-		log.Println("mq.Publish success")
-		meta.UpdateFileMetaDb(fileMeta)
+	//写入到ceph
+	// newFile.Seek(0, 0)
+	// data, _ := ioutil.ReadAll(newFile)
+	// bucket := ceph.GetCephBucket("testbucket1")
+	// cephPath := "/ceph/" + fileMeta.FileSha1
+	// _ = bucket.Put(cephPath, data, "octet-stream", s3.PublicRead)
+	// fileMeta.Location = cephPath
 
-		// update user file table
-		r.ParseForm()
-		username := r.Form.Get("username")
-		suc := db.OnUserFileUploadFinished(username, fileMeta.FileSha1, fileMeta.FileName, fileMeta.FileSize)
-		if suc {
-			http.Redirect(w, r, "/static/view/home.html", http.StatusFound)
-		} else {
-			w.Write([]byte("upload failed"))
-		}
+	//写入到rabbitmq
+	cephPath := "/ceph/" + fileMeta.FileSha1
+	data := mq.TransferData{
+		FileHash:      fileMeta.FileSha1,
+		CurLocation:   fileMeta.Location,
+		Destination:   cephPath,
+		DestStoreType: common.StoreOSS,
+	}
+	pubData, _ := json.Marshal(data) //to to  为什么转化成json
+	res := mq.Publish(
+		config.TransExchangeName,
+		config.TransOSSRoutingKey,
+		pubData)
+	if !res {
+		log.Println("mq.Publish failed")
+	}
+	log.Println("mq.Publish success")
+	meta.UpdateFileMetaDb(fileMeta)
+
+	// update user file table
+
+	username := c.Request.FormValue("username")
+	suc := db.OnUserFileUploadFinished(username, fileMeta.FileSha1, fileMeta.FileName, fileMeta.FileSize)
+	if suc {
+		c.Redirect(http.StatusFound, "/static/view/home.html")
+	} else {
+		c.JSON(http.StatusOK, gin.H{
+			"msg":  "update user file error :invalid parameter",
+			"code": -1,
+		})
 	}
 }
+
+//UploadSucHandler is used to
 func UploadSucHandler(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "update success")
 }
 
-func GetFileMetaHandler(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	fileSha1 := r.Form["filehash"][0]
+//GetFileMetaHandler is used to
+func GetFileMetaHandler(c *gin.Context) {
+	fileSha1 := c.Request.Form["filehash"][0]
 	//	fileSha1:=r.Form.Get("filehash")
-	testData := r.Form["filehash"]
+	testData := c.Request.Form["filehash"]
 	fmt.Println("test data:", testData)
 	filemata, err := meta.GetFileMetaDB(fileSha1)
 	if err != nil {
 		log.Println(err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"msg":  "get file meta failed",
+			"code": -1,
+		})
 		return
 	}
 	data, err := json.Marshal(filemata)
 	if err != nil {
 		fmt.Println("json format error:", err)
-		io.WriteString(w, "json format error")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"msg":  "json format error",
+			"code": -1,
+		})
 		return
 	}
-	io.WriteString(w, string(data))
-	w.Write(data)
+	c.Data(http.StatusOK, "application/json", data)
 }
 
 //func DownloadHandler(w http.ResponseWriter,r *http.Request){
@@ -252,5 +261,5 @@ func TryFastUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 func DownloadUrlHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
-	fileLocation:=r.Form.Get("filehash")
+	fileLocation := r.Form.Get("filehash")
 }
